@@ -1,12 +1,12 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { DataSource } from 'typeorm';
 import { join } from 'path';
 import * as fs from 'fs';
 import { AppModule } from './app.module';
 import { seed } from './seed';
 import { UPLOAD_DIR } from './api';
+import { DataSource } from 'typeorm';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -23,7 +23,7 @@ async function bootstrap() {
 
   const port = process.env.PORT || 3000;
   await app.listen(port);
-  console.log(`🚀 StudyFlow API running on http://localhost:${port}/api`);
+  console.log(`StudyFlow API running on http://localhost:${port}/api`);
 
   try {
     await seed(app.get(DataSource));

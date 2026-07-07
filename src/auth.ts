@@ -44,10 +44,10 @@ export class AuthGuard implements CanActivate {
     } catch {
       throw new UnauthorizedException('Invalid session'); // malformed uuid
     }
-    if (!session) throw new UnauthorizedException('Session expired — please log in again');
+    if (!session) throw new UnauthorizedException('Session expired - please log in again');
     if (new Date(session.expiresAt) < new Date()) {
       await this.sessions.delete({ id: session.id });
-      throw new UnauthorizedException('Session expired — please log in again');
+      throw new UnauthorizedException('Session expired - please log in again');
     }
 
     const user = await this.users.findOneBy({ id: session.userId });
@@ -102,7 +102,7 @@ export class AuthController {
   }
 
   @Delete('logout')
-  async logout(@CurrentUser() u: any, @Body() _body: any) {
+  async logout(@CurrentUser() u: any) {
     await this.sessions.delete({ userId: u.sub });
     return { ok: true };
   }

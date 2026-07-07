@@ -37,6 +37,17 @@ export class SubjectsController {
     return this.repo.find({ where: { userId: u.sub }, order: { name: 'ASC' } });
   }
 
+  @Get('gpa')
+  async gpa(@CurrentUser() u: any) {
+    const subjects = await this.repo.findBy({ userId: u.sub });
+    let points = 0, credits = 0;
+    for (const s of subjects) {
+      const gp = GRADE_POINTS[(s.grade || '').toUpperCase()];
+      if (gp !== undefined && s.credits > 0) { points += gp * s.credits; credits += s.credits; }
+    }
+    return { gpa: credits ? +(points / credits).toFixed(2) : null, gradedCredits: credits, totalSubjects: subjects.length };
+  }
+
   @Post()
   create(@CurrentUser() u: any, @Body() body: any) {
     if (!body?.name) throw new BadRequestException('name is required');
@@ -56,17 +67,6 @@ export class SubjectsController {
     await this.repo.delete({ id, userId: u.sub });
     return { ok: true };
   }
-
-  @Get('gpa')
-  async gpa(@CurrentUser() u: any) {
-    const subjects = await this.repo.findBy({ userId: u.sub });
-    let points = 0, credits = 0;
-    for (const s of subjects) {
-      const gp = GRADE_POINTS[(s.grade || '').toUpperCase()];
-      if (gp !== undefined && s.credits > 0) { points += gp * s.credits; credits += s.credits; }
-    }
-    return { gpa: credits ? +(points / credits).toFixed(2) : null, gradedCredits: credits, totalSubjects: subjects.length };
-  }
 }
 
 // ---------------- Schedule ----------------
@@ -80,6 +80,11 @@ export class ScheduleController {
   @Get()
   list(@CurrentUser() u: any) {
     return this.repo.find({ where: { userId: u.sub }, order: { day: 'ASC', startTime: 'ASC' } });
+  }
+
+  @Get('uploads')
+  uploads(@CurrentUser() u: any) {
+    return this.files.find({ where: { userId: u.sub, kind: 'timetable' }, order: { uploadedAt: 'DESC' } });
   }
 
   @Post()
@@ -113,11 +118,6 @@ export class ScheduleController {
       userId: u.sub, filename: file.filename, originalName: file.originalname,
       mimetype: file.mimetype, size: file.size, kind: 'timetable',
     }));
-  }
-
-  @Get('uploads')
-  uploads(@CurrentUser() u: any) {
-    return this.files.find({ where: { userId: u.sub, kind: 'timetable' }, order: { uploadedAt: 'DESC' } });
   }
 }
 
