@@ -583,8 +583,9 @@ async function seedScheduled(ds: DataSource) {
   // exam  : 12:45 -> 14:05  (80 MCQs x 1 min = exactly 80 minutes)
   const now = new Date();
   const at = (h: number, m: number) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h - 5, m));
-  const quizStart = at(12, 30), quizEnd = at(12, 45);
-  const examStart = at(12, 45), examEnd = at(14, 5);
+  // DEMO MODE: quiz and exam are live right now (windows refresh to now -> +48h on every boot)
+  const quizStart = new Date(Date.now() - 3600000), quizEnd = new Date(Date.now() + 48 * 3600000);
+  const examStart = quizStart, examEnd = quizEnd;
 
   const teacher = await users.findOneBy({ email: 'teacher@studyoka.com' });
   if (!teacher) return;
