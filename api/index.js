@@ -14,10 +14,22 @@ let cached;
 async function getServer() {
   if (cached) return cached;
   const expressApp = express();
+  // CORS for all origins (including preflight), on every route
+  expressApp.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') return res.status(204).end();
+    next();
+  });
   if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
   expressApp.use('/uploads', express.static(UPLOAD_DIR));
   const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp));
-  app.enableCors();
+  app.enableCors({
+    origin: '*',
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    allowedHeaders: 'Content-Type, Authorization',
+  });
   app.setGlobalPrefix('api');
   await app.init();
   seed(app.get(DataSource)).catch((e) => console.error('Seed skipped:', e.message));

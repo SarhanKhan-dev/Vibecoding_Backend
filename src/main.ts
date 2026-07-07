@@ -10,7 +10,11 @@ import { UPLOAD_DIR } from './api';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  app.enableCors();
+  app.enableCors({
+    origin: '*',
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    allowedHeaders: 'Content-Type, Authorization',
+  });
   app.setGlobalPrefix('api', { exclude: ['uploads/(.*)'] });
 
   const uploadsDir = UPLOAD_DIR.startsWith('/') ? UPLOAD_DIR : join(process.cwd(), UPLOAD_DIR);
