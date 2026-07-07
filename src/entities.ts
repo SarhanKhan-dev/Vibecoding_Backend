@@ -140,6 +140,75 @@ export class Quiz {
   @Column({ default: '' }) description: string;
   @Column({ type: 'int', default: 10 }) totalMarks: number;
   @Column({ type: 'timestamptz', nullable: true }) date: Date;
+  @Column({ default: 'manual' }) kind: string; // manual | online | exam
+  @Column({ type: 'timestamptz', nullable: true }) startAt: Date; // exam window (exam: set by superadmin)
+  @Column({ type: 'timestamptz', nullable: true }) endAt: Date;
+  @Column({ type: 'int', default: 60 }) secondsPerQuestion: number;
+  @Column({ type: 'int', default: 0 }) questionsPerStudent: number; // 0 = all
+  @Column({ nullable: true }) refFilename: string; // teacher-only reference PDF
+  @Column({ default: '' }) refOriginalName: string;
+  @CreateDateColumn() createdAt: Date;
+}
+
+@Entity('quiz_questions')
+export class QuizQuestion {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column() quizId: number;
+  @Column({ type: 'text' }) text: string;
+  @Column({ type: 'simple-json' }) options: string[];
+  @Column({ type: 'int' }) correct: number; // index into options
+}
+
+@Entity('quiz_attempts')
+export class QuizAttempt {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column() quizId: number;
+  @Index() @Column() studentId: number;
+  @Column({ type: 'simple-json' }) questionIds: number[]; // this student's randomized set
+  @Column({ type: 'simple-json' }) answers: Record<string, number>; // questionId -> chosen index
+  @Column({ type: 'float', default: 0 }) score: number;
+  @Column({ default: 'in_progress' }) status: string; // in_progress | finished
+  @CreateDateColumn() startedAt: Date;
+  @Column({ type: 'timestamptz', nullable: true }) finishedAt: Date;
+}
+
+@Entity('class_assignments')
+export class ClassAssignment {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column() subjectId: number;
+  @Index() @Column() teacherId: number;
+  @Column() title: string;
+  @Column({ default: '' }) description: string;
+  @Column({ type: 'timestamptz', nullable: true }) dueDate: Date;
+  @Column({ type: 'simple-json' }) questions: { q: string; answer: string; marks: number }[];
+  @CreateDateColumn() createdAt: Date;
+}
+
+@Entity('assignment_submissions')
+export class AssignmentSubmission {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column() assignmentId: number;
+  @Index() @Column() studentId: number;
+  @Column({ type: 'simple-json' }) answers: string[];
+  @Column({ nullable: true }) filename: string;
+  @Column({ default: '' }) originalName: string;
+  @Column({ type: 'float', default: 0 }) score: number;
+  @Column({ type: 'float', default: 0 }) maxScore: number;
+  @Column({ default: 'graded' }) status: string; // graded (auto) | overridden
+  @CreateDateColumn() submittedAt: Date;
+}
+
+@Entity('teacher_change_requests')
+export class TeacherChangeRequest {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column() studentId: number;
+  @Column({ nullable: true }) subjectId: number;
+  @Column({ type: 'text' }) reason: string;
+  @Column({ default: '' }) desiredTeacher: string;
+  @Column({ nullable: true }) filename: string;
+  @Column({ default: '' }) originalName: string;
+  @Column({ default: 'pending' }) status: string; // pending | approved | rejected
+  @Column({ default: '' }) adminComment: string;
   @CreateDateColumn() createdAt: Date;
 }
 

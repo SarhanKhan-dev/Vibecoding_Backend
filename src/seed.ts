@@ -5,6 +5,7 @@ import { join } from 'path';
 import {
   User, Subject, ScheduleSlot, Assignment, Exam, Note, FileItem,
   Enrollment, LeaveApplication, AttendanceRecord, Quiz, QuizGrade, RetakeRequest,
+  QuizQuestion, ClassAssignment, TeacherChangeRequest,
 } from './entities';
 import { UPLOAD_DIR } from './api';
 
@@ -82,7 +83,7 @@ export async function seed(ds: DataSource) {
 
   // Seed version check: rich seed has 8 subjects. If already there, just regen files.
   const existing = await subjRepo.countBy({ userId: uid });
-  if (existing >= 8) { await regenFiles(); await seedRbac(ds, demo); return; }
+  if (existing >= 8) { await regenFiles(); await seedRbac(ds, demo); await seedOnline(ds, demo); return; }
 
   // Wipe old (smaller) demo data and reseed rich
   for (const repo of [subjRepo, slotRepo, aRepo, eRepo, nRepo, fRepo] as any[]) {
@@ -201,6 +202,7 @@ export async function seed(ds: DataSource) {
   ]);
 
   await seedRbac(ds, demo);
+  await seedOnline(ds, demo);
   console.log('Seeded rich demo data: demo@student.com / demo123');
 }
 
@@ -315,4 +317,94 @@ async function seedRbac(ds: DataSource, demo: User) {
   }));
 
   console.log('Seeded RBAC: admin@studyflow.com/admin123, teacher@studyflow.com/teacher123');
+}
+
+// ---------- Online quiz / exam / classwork seed (idempotent) ----------
+async function seedOnline(ds: DataSource, demo: User) {
+  const users = ds.getRepository(User);
+  const subjRepo = ds.getRepository(Subject);
+  const quizRepo = ds.getRepository(Quiz);
+  const qRepo = ds.getRepository(QuizQuestion);
+  const caRepo = ds.getRepository(ClassAssignment);
+  const tcRepo = ds.getRepository(TeacherChangeRequest);
+
+  if (await qRepo.count() > 0) return; // already seeded
+
+  const teacher = await users.findOneBy({ email: 'teacher@studyflow.com' });
+  if (!teacher) return;
+  const tSubs = await subjRepo.findBy({ teacherId: teacher.id });
+  const cs201 = tSubs.find((s) => s.code === 'CS-201') || tSubs[0];
+  const cs310 = tSubs.find((s) => s.code === 'CS-310') || tSubs[0];
+  if (!cs201) return;
+
+  const mcq = (text: string, options: string[], correct: number) => ({ text, options, correct });
+
+  // Live online quiz (open for the next 24h so the demo always works)
+  const live = await quizRepo.save(quizRepo.create({
+    subjectId: cs201.id, teacherId: teacher.id, kind: 'online',
+    title: 'Online Quiz - Big-O & Trees', description: 'Timed MCQ quiz: 60 seconds per question',
+    totalMarks: 5, questionsPerStudent: 5, secondsPerQuestion: 60,
+    startAt: new Date(Date.now() - 3600000), endAt: new Date(Date.now() + 24 * 3600000),
+    date: new Date(),
+  }));
+  await qRepo.save([
+    mcq('What is the time complexity of binary search?', ['O(n)', 'O(log n)', 'O(n log n)', 'O(1)'], 1),
+    mcq('Which data structure uses LIFO ordering?', ['Queue', 'Stack', 'Heap', 'Deque'], 1),
+    mcq('The height of a balanced BST with n nodes is:', ['O(n)', 'O(n^2)', 'O(log n)', 'O(1)'], 2),
+    mcq('Which traversal of a BST yields sorted order?', ['Preorder', 'Postorder', 'Inorder', 'Level-order'], 2),
+    mcq('Worst case of quicksort is:', ['O(n log n)', 'O(n)', 'O(n^2)', 'O(log n)'], 2),
+    mcq('A complete binary tree with n nodes has height:', ['n', 'log2(n)', 'sqrt(n)', 'n/2'], 1),
+    mcq('Which structure backs a priority queue efficiently?', ['Linked list', 'Heap', 'Stack', 'Hash map'], 1),
+  ].map((q) => qRepo.create({ ...q, quizId: live.id })));
+
+  // Exam draft: teacher uploaded questions, superadmin still has to schedule it
+  const exam = await quizRepo.save(quizRepo.create({
+    subjectId: cs310.id, teacherId: teacher.id, kind: 'exam',
+    title: 'Final Exam - Database Systems', description: 'Each student receives a randomized MCQ set, 1 minute per question.',
+    totalMarks: 8, questionsPerStudent: 8, secondsPerQuestion: 60,
+    startAt: null, endAt: null, date: new Date(),
+  }));
+  await qRepo.save([
+    mcq('Which normal form removes partial dependencies?', ['1NF', '2NF', '3NF', 'BCNF'], 1),
+    mcq('A primary key must be:', ['Unique and not null', 'Only unique', 'Only not null', 'Indexed'], 0),
+    mcq('Which JOIN returns all rows from both tables?', ['INNER', 'LEFT', 'RIGHT', 'FULL OUTER'], 3),
+    mcq('ACID stands for Atomicity, Consistency, Isolation and:', ['Distribution', 'Durability', 'Dependency', 'Delegation'], 1),
+    mcq('An index primarily speeds up:', ['INSERT', 'SELECT', 'DELETE', 'GRANT'], 1),
+    mcq('Which SQL clause filters grouped rows?', ['WHERE', 'HAVING', 'GROUP BY', 'ORDER BY'], 1),
+    mcq('A foreign key enforces:', ['Uniqueness', 'Referential integrity', 'Atomicity', 'Normalization'], 1),
+    mcq('Which isolation level allows dirty reads?', ['SERIALIZABLE', 'REPEATABLE READ', 'READ COMMITTED', 'READ UNCOMMITTED'], 3),
+    mcq('BCNF requires every determinant to be a:', ['Foreign key', 'Candidate key', 'Super key', 'Composite key'], 1),
+    mcq('Denormalization is done mainly to improve:', ['Write safety', 'Read performance', 'Integrity', 'Security'], 1),
+  ].map((q) => qRepo.create({ ...q, quizId: exam.id })));
+  writeSeedPdf('seed-exam-ref.pdf', ['Final Exam Question Bank', 'Database Systems (CS-310)', 'CONFIDENTIAL - teacher reference copy']);
+  exam.refFilename = 'seed-exam-ref.pdf';
+  exam.refOriginalName = 'final-exam-question-bank.pdf';
+  await quizRepo.save(exam);
+
+  // Digital classwork with answer key (auto-graded)
+  await caRepo.save(caRepo.create({
+    subjectId: cs201.id, teacherId: teacher.id,
+    title: 'Worksheet 3 - Complexity Basics',
+    description: 'Answer briefly. Answers are auto-checked, so keep them exact.',
+    dueDate: day(4, 23),
+    questions: [
+      { q: 'What is the Big-O of linear search? (format: O(...))', answer: 'O(n)', marks: 2 },
+      { q: 'Name the tree rotation used for a Left-Left imbalance (two words).', answer: 'right rotate', marks: 2 },
+      { q: 'What does FIFO stand for? (four words)', answer: 'first in first out', marks: 1 },
+    ],
+  }));
+
+  // A pending teacher-change request for the superadmin demo
+  const ali = await users.findOneBy({ email: 'ali@student.com' });
+  if (ali) {
+    writeSeedPdf('seed-change-req.pdf', ['Teacher Change Request', 'Student: Ali Hamza', 'Supporting summary of scheduling conflicts']);
+    await tcRepo.save(tcRepo.create({
+      studentId: ali.id, subjectId: cs201.id,
+      reason: 'My section timing clashes with my part-time work permit hours. Requesting transfer to the evening section.',
+      desiredTeacher: 'Dr. Fatima Noor (evening section)',
+      filename: 'seed-change-req.pdf', originalName: 'schedule-conflict-summary.pdf',
+    }));
+  }
+
+  console.log('Seeded online quiz, exam draft, classwork and change request');
 }
