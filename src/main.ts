@@ -23,7 +23,7 @@ async function bootstrap() {
 
   const port = process.env.PORT || 3000;
   await app.listen(port);
-  console.log(`StudyFlow API running on http://localhost:${port}/api`);
+  console.log(`StudyOKA API running on http://localhost:${port}/api`);
 
   try {
     await seed(app.get(DataSource));
