@@ -16,7 +16,7 @@ import {
   TeacherController, MyController, LeavesController, AttendanceController,
   QuizzesController, RetakesController, AdminController,
 } from './rbac';
-import { OnlineController, ClassworkController, TeacherChangeController } from './extra';
+import { OnlineController, ClassworkController, TeacherChangeController, GradebookController } from './extra';
 
 const entities = [
   User, Session, Subject, ScheduleSlot, Assignment, Exam, Note, FileItem,
@@ -40,7 +40,7 @@ const entities = [
     ExamsController, NotesController, FilesController, DashboardController,
     TeacherController, MyController, LeavesController, AttendanceController,
     QuizzesController, RetakesController, AdminController,
-    OnlineController, ClassworkController, TeacherChangeController,
+    OnlineController, ClassworkController, TeacherChangeController, GradebookController,
   ],
   providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
 })

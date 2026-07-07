@@ -34,6 +34,7 @@ export class Subject {
   @Column({ type: 'int', default: 3 }) credits: number;
   @Column({ default: '' }) grade: string; // A, A-, B+ ... for GPA calc
   @Column({ nullable: true }) teacherId: number; // set when owned by a teacher account
+  @Column({ default: '' }) section: string; // e.g. CS-3A
   @CreateDateColumn() createdAt: Date;
 }
 
@@ -141,6 +142,7 @@ export class Quiz {
   @Column({ type: 'int', default: 10 }) totalMarks: number;
   @Column({ type: 'timestamptz', nullable: true }) date: Date;
   @Column({ default: 'manual' }) kind: string; // manual | online | exam
+  @Column({ default: 'quiz' }) category: string; // quiz | assignment | mid | final | presentation
   @Column({ type: 'timestamptz', nullable: true }) startAt: Date; // exam window (exam: set by superadmin)
   @Column({ type: 'timestamptz', nullable: true }) endAt: Date;
   @Column({ type: 'int', default: 60 }) secondsPerQuestion: number;

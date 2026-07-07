@@ -83,7 +83,7 @@ export async function seed(ds: DataSource) {
 
   // Seed version check: rich seed has 8 subjects. If already there, just regen files.
   const existing = await subjRepo.countBy({ userId: uid });
-  if (existing >= 8) { await regenFiles(); await seedRbac(ds, demo); await seedOnline(ds, demo); return; }
+  if (existing >= 8) { await regenFiles(); await seedRbac(ds, demo); await seedOnline(ds, demo); await seedCampus(ds, demo); return; }
 
   // Wipe old (smaller) demo data and reseed rich
   for (const repo of [subjRepo, slotRepo, aRepo, eRepo, nRepo, fRepo] as any[]) {
@@ -203,6 +203,7 @@ export async function seed(ds: DataSource) {
 
   await seedRbac(ds, demo);
   await seedOnline(ds, demo);
+  await seedCampus(ds, demo);
   console.log('Seeded rich demo data: demo@student.com / demo123');
 }
 
@@ -407,4 +408,155 @@ async function seedOnline(ds: DataSource, demo: User) {
   }
 
   console.log('Seeded online quiz, exam draft, classwork and change request');
+}
+
+// ---------- Campus seed v4: 3 teachers, 25 students, sections, full weighted gradebook ----------
+async function seedCampus(ds: DataSource, demo: User) {
+  const users = ds.getRepository(User);
+  if (await users.findOneBy({ email: 'student25@studyflow.com' })) return; // already seeded
+
+  const subjRepo = ds.getRepository(Subject);
+  const enrRepo = ds.getRepository(Enrollment);
+  const quizRepo = ds.getRepository(Quiz);
+  const gradeRepo = ds.getRepository(QuizGrade);
+  const qRepo = ds.getRepository(QuizQuestion);
+  const attRepo = ds.getRepository(AttendanceRecord);
+
+  const mk = async (email: string, name: string, role: string, pass: string) => {
+    const existing = await users.findOneBy({ email });
+    if (existing) return existing;
+    return users.save(users.create({
+      email, name, role, passwordHash: await bcrypt.hash(pass, 10),
+      university: 'Tech University', major: role === 'student' ? 'Computer Science' : '',
+    }));
+  };
+
+  // 1 superadmin (already exists via earlier seed), 3 teachers, 25 students
+  await mk('admin@studyflow.com', 'Super Admin', 'superadmin', 'admin123');
+  const t1 = await mk('teacher@studyflow.com', 'Dr. Ahmed Raza', 'teacher', 'teacher123');
+  const t2 = await mk('teacher2@studyflow.com', 'Prof. Sana Khan', 'teacher', 'teacher123');
+  const t3 = await mk('teacher3@studyflow.com', 'Dr. Fatima Noor', 'teacher', 'teacher123');
+
+  const NAMES = [
+    'Ali Hamza', 'Zara Sheikh', 'Omar Farooq', 'Ayesha Iqbal', 'Hassan Mehmood',
+    'Fatima Zahra', 'Bilal Chaudhry', 'Mahnoor Tariq', 'Usman Ghani', 'Hira Aslam',
+    'Danish Iqbal', 'Sana Riaz', 'Hamza Yousaf', 'Iqra Nadeem', 'Fahad Malik',
+    'Noor Fatima', 'Saad Qureshi', 'Amna Javed', 'Taha Siddiqui', 'Laiba Khan',
+    'Zaid Anwar', 'Rabia Shafiq', 'Moiz Akhtar', 'Eman Baig', 'Areeb Hussain',
+  ];
+  const students: User[] = [];
+  for (let i = 0; i < 25; i++) {
+    students.push(await mk(`student${i + 1}@studyflow.com`, NAMES[i], 'student', 'student123'));
+  }
+  // demo student joins Section A
+  const secA = [demo, ...students.slice(0, 12)];  // 13 students
+  const secB = students.slice(12);                 // 13 students
+
+  // each teacher runs 2 papers (one per section)
+  const mkSub = async (t: User, name: string, code: string, color: string, room: string, credits: number, section: string) => {
+    const existing = await subjRepo.findOneBy({ teacherId: t.id, code, section });
+    if (existing) return existing;
+    return subjRepo.save(subjRepo.create({
+      userId: t.id, teacherId: t.id, teacher: t.name, name, code, color, room, credits, section,
+    }));
+  };
+  const subsA = [
+    await mkSub(t1, 'Data Structures', 'CS-201', '#6366f1', 'B-104', 4, 'CS-3A'),
+    await mkSub(t2, 'Linear Algebra', 'MATH-210', '#10b981', 'A-201', 3, 'CS-3A'),
+    await mkSub(t3, 'Technical Writing', 'ENG-102', '#ec4899', 'C-110', 2, 'CS-3A'),
+  ];
+  const subsB = [
+    await mkSub(t1, 'Database Systems', 'CS-310', '#06b6d4', 'Lab-1', 3, 'CS-3B'),
+    await mkSub(t2, 'Operating Systems', 'CS-305', '#f59e0b', 'Lab-2', 4, 'CS-3B'),
+    await mkSub(t3, 'Computer Networks', 'CS-330', '#8b5cf6', 'B-201', 3, 'CS-3B'),
+  ];
+
+  const enroll = async (sub: Subject, ss: User[]) => {
+    for (const st of ss) {
+      const dup = await enrRepo.findOneBy({ subjectId: sub.id, studentId: st.id });
+      if (!dup) await enrRepo.save(enrRepo.create({ subjectId: sub.id, studentId: st.id }));
+    }
+  };
+  for (const sub of subsA) await enroll(sub, secA);
+  for (const sub of subsB) await enroll(sub, secB);
+
+  // deterministic pseudo-random marks so every student has a realistic transcript
+  const mark = (sid: number, qid: number, total: number) => {
+    const r = Math.abs(Math.sin(sid * 7.13 + qid * 3.71));
+    return Math.round((0.45 + r * 0.55) * total * 2) / 2; // between 45% and 100%
+  };
+
+  const gradedItem = async (sub: Subject, ss: User[], title: string, category: string, total: number, daysAgo: number) => {
+    const quiz = await quizRepo.save(quizRepo.create({
+      subjectId: sub.id, teacherId: sub.teacherId, title, category,
+      kind: 'manual', totalMarks: total, date: day(-daysAgo, 10),
+    }));
+    await gradeRepo.save(ss.map((st) => gradeRepo.create({
+      quizId: quiz.id, studentId: st.id, marks: mark(st.id, quiz.id, total), status: 'graded',
+    })));
+  };
+
+  // full weighted transcript per subject: 2 quizzes + assignment + mid + presentation (graded), final scheduled ahead
+  const seedSubject = async (sub: Subject, ss: User[]) => {
+    await gradedItem(sub, ss, `${sub.code} Quiz 1`, 'quiz', 10, 30);
+    await gradedItem(sub, ss, `${sub.code} Quiz 2`, 'quiz', 10, 16);
+    await gradedItem(sub, ss, `${sub.code} Assignment 1`, 'assignment', 20, 22);
+    await gradedItem(sub, ss, `${sub.code} Midterm`, 'mid', 30, 12);
+    await gradedItem(sub, ss, `${sub.code} Presentation`, 'presentation', 10, 6);
+
+    // Final: online exam with an MCQ bank, scheduled by administration for +3 days
+    const finalExam = await quizRepo.save(quizRepo.create({
+      subjectId: sub.id, teacherId: sub.teacherId, kind: 'exam', category: 'final',
+      title: `${sub.name} Final Exam`, description: 'Randomized MCQ set per student, 1 minute per question.',
+      totalMarks: 6, questionsPerStudent: 6, secondsPerQuestion: 60,
+      startAt: day(3, 9, 0), endAt: day(3, 10, 30), date: day(3, 9, 0),
+    }));
+    const bank = [
+      ['Which complexity grows fastest?', ['O(n)', 'O(log n)', 'O(n^2)', 'O(1)'], 2],
+      ['Binary search requires the input to be:', ['Hashed', 'Sorted', 'Balanced', 'Unique'], 1],
+      ['Which is NOT a linear structure?', ['Array', 'Queue', 'Tree', 'Stack'], 2],
+      ['A stable sort preserves:', ['Memory', 'Order of equal keys', 'Indices', 'Duplicates'], 1],
+      ['Hash collisions are resolved by:', ['Sorting', 'Chaining', 'Caching', 'Hashing again always'], 1],
+      ['Recursion needs a:', ['Loop', 'Base case', 'Pointer', 'Array'], 1],
+      ['FIFO describes a:', ['Stack', 'Queue', 'Tree', 'Graph'], 1],
+      ['Which needs O(1) average lookup?', ['Linked list', 'Hash map', 'BST', 'Heap'], 1],
+    ];
+    await qRepo.save(bank.map(([text, options, correct]: any) => qRepo.create({
+      quizId: finalExam.id, text, options, correct,
+    })));
+  };
+  for (const sub of subsA) await seedSubject(sub, secA);
+  for (const sub of subsB) await seedSubject(sub, secB);
+
+  // a LIVE online quiz right now for Section A so it can be tested immediately
+  const liveQuiz = await quizRepo.save(quizRepo.create({
+    subjectId: subsA[0].id, teacherId: t1.id, kind: 'online', category: 'quiz',
+    title: 'Live Online Quiz - Trees & Graphs', description: 'Open now - 60 seconds per question',
+    totalMarks: 5, questionsPerStudent: 5, secondsPerQuestion: 60,
+    startAt: new Date(Date.now() - 3600000), endAt: day(2, 23), date: new Date(),
+  }));
+  await qRepo.save([
+    ['Inorder traversal of a BST is:', ['Random', 'Sorted', 'Reversed', 'Level order'], 1],
+    ['AVL trees rebalance using:', ['Hashing', 'Rotations', 'Sorting', 'Merging'], 1],
+    ['BFS uses which structure?', ['Stack', 'Queue', 'Heap', 'Set'], 1],
+    ['DFS uses which structure?', ['Queue', 'Stack', 'Map', 'List'], 1],
+    ['A tree with n nodes has how many edges?', ['n', 'n-1', 'n+1', '2n'], 1],
+    ['Dijkstra fails with:', ['Cycles', 'Negative edges', 'Loops', 'Large graphs'], 1],
+    ['Height of a single-node tree is:', ['1', '0', '-1', '2'], 1],
+  ].map(([text, options, correct]: any) => qRepo.create({ quizId: liveQuiz.id, text, options, correct })));
+
+  // attendance for the last 3 sessions of every subject
+  const dstr2 = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
+  for (const [subs, ss] of [[subsA, secA], [subsB, secB]] as [Subject[], User[]][]) {
+    for (const sub of subs) {
+      for (let dd = 0; dd < 3; dd++) {
+        await attRepo.save(ss.map((st) => attRepo.create({
+          subjectId: sub.id, teacherId: sub.teacherId, studentId: st.id, date: dstr2(dd * 2 + 1),
+          status: Math.abs(Math.sin(st.id * 3 + dd * 5 + sub.id)) > 0.85 ? 'absent' : Math.abs(Math.sin(st.id + dd + sub.id)) > 0.9 ? 'late' : 'present',
+        })));
+      }
+    }
+  }
+
+  console.log('Seeded campus v4: 3 teachers, 25 students, sections CS-3A/CS-3B, full gradebook');
 }

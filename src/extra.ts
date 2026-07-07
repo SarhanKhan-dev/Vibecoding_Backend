@@ -67,6 +67,7 @@ export class OnlineController {
     const perStudent = Math.min(+body.questionsPerStudent || questions.length, questions.length);
     const quiz = await this.quizzes.save(this.quizzes.create({
       subjectId: +subjectId, teacherId: u.sub, title, description,
+      category: ['quiz', 'assignment', 'mid', 'final', 'presentation'].includes(body.category) ? body.category : (kind === 'exam' ? 'final' : 'quiz'),
       kind: kind === 'exam' ? 'exam' : 'online',
       totalMarks: perStudent,
       questionsPerStudent: perStudent,
@@ -408,5 +409,93 @@ export class TeacherChangeController {
     item.status = body?.status === 'approved' ? 'approved' : 'rejected';
     item.adminComment = body?.adminComment || '';
     return this.requests.save(item);
+  }
+}
+
+// ================= Weighted gradebook =================
+export const GRADE_WEIGHTS: Record<string, number> = { quiz: 15, assignment: 15, mid: 25, final: 35, presentation: 10 };
+
+const letterFor = (pct: number) =>
+  pct >= 85 ? 'A' : pct >= 80 ? 'A-' : pct >= 75 ? 'B+' : pct >= 70 ? 'B' : pct >= 65 ? 'B-'
+  : pct >= 60 ? 'C+' : pct >= 55 ? 'C' : pct >= 50 ? 'D' : 'F';
+const pointsFor = (l: string) => (({ 'A': 4.0, 'A-': 3.7, 'B+': 3.3, 'B': 3.0, 'B-': 2.7, 'C+': 2.3, 'C': 2.0, 'D': 1.0, 'F': 0 } as any)[l] ?? 0);
+
+@Controller('gradebook')
+export class GradebookController {
+  constructor(
+    @InjectRepository(Quiz) private quizzes: Repository<Quiz>,
+    @InjectRepository(QuizGrade) private grades: Repository<QuizGrade>,
+    @InjectRepository(ClassAssignment) private cas: Repository<ClassAssignment>,
+    @InjectRepository(AssignmentSubmission) private subs: Repository<AssignmentSubmission>,
+    @InjectRepository(Enrollment) private enrollments: Repository<Enrollment>,
+    @InjectRepository(Subject) private subjects: Repository<Subject>,
+    @InjectRepository(User) private users: Repository<User>,
+  ) {}
+
+  // Compute weighted result for a set of students in one subject
+  private async compute(subjectId: number, studentIds: number[]) {
+    const quizzes = await this.quizzes.findBy({ subjectId });
+    const grades = quizzes.length ? await this.grades.findBy({ quizId: In(quizzes.map((q) => q.id)) }) : [];
+    const cas = await this.cas.findBy({ subjectId });
+    const submissions = cas.length ? await this.subs.findBy({ assignmentId: In(cas.map((c) => c.id)) }) : [];
+
+    return studentIds.map((sid) => {
+      const cats: Record<string, { got: number; max: number; count: number }> = {};
+      const add = (cat: string, got: number, max: number) => {
+        if (!cats[cat]) cats[cat] = { got: 0, max: 0, count: 0 };
+        cats[cat].got += got; cats[cat].max += max; cats[cat].count++;
+      };
+      for (const q of quizzes) {
+        const g = grades.find((x) => x.quizId === q.id && x.studentId === sid);
+        if (g && g.status === 'graded' && g.marks !== null) add(q.category || 'quiz', g.marks, q.totalMarks);
+      }
+      for (const sub of submissions.filter((x) => x.studentId === sid)) {
+        if (sub.maxScore > 0) add('assignment', sub.score, sub.maxScore);
+      }
+      // weight redistribution: only categories with recorded work count
+      let wSum = 0, weighted = 0;
+      const breakdown: Record<string, { pct: number; weight: number; items: number }> = {};
+      for (const [cat, v] of Object.entries(cats)) {
+        if (v.max <= 0) continue;
+        const w = GRADE_WEIGHTS[cat] ?? 10;
+        const pct = (v.got / v.max) * 100;
+        breakdown[cat] = { pct: +pct.toFixed(1), weight: w, items: v.count };
+        wSum += w; weighted += pct * w;
+      }
+      const total = wSum ? +(weighted / wSum).toFixed(1) : null;
+      const letter = total === null ? null : letterFor(total);
+      return { studentId: sid, breakdown, total, letter, gpa: letter ? pointsFor(letter) : null };
+    });
+  }
+
+  @Roles('teacher', 'superadmin')
+  @Get('subject/:id')
+  async forSubject(@CurrentUser() u: any, @Param('id', ParseIntPipe) id: number) {
+    const subject = await this.subjects.findOneBy({ id, teacherId: u.sub });
+    if (!subject) throw new NotFoundException('Subject not found');
+    const enr = await this.enrollments.findBy({ subjectId: id });
+    const ids = enr.map((e) => e.studentId);
+    const students = ids.length ? await this.users.findBy({ id: In(ids) }) : [];
+    const rows = await this.compute(id, ids);
+    return {
+      subject, weights: GRADE_WEIGHTS,
+      rows: rows.map((r) => ({ ...r, student: safeUser(students.find((s) => s.id === r.studentId) || ({} as User)) }))
+        .sort((a, b) => (b.total ?? -1) - (a.total ?? -1)),
+    };
+  }
+
+  @Get('my')
+  async my(@CurrentUser() u: any) {
+    const enr = await this.enrollments.findBy({ studentId: u.sub });
+    if (!enr.length) return { subjects: [], weights: GRADE_WEIGHTS, gpa: null };
+    const subs = await this.subjects.findBy({ id: In(enr.map((e) => e.subjectId)) });
+    const results = [];
+    let pts = 0, creds = 0;
+    for (const s of subs) {
+      const [row] = await this.compute(s.id, [u.sub]);
+      results.push({ subject: s, ...row });
+      if (row.gpa !== null) { pts += row.gpa * (s.credits || 3); creds += s.credits || 3; }
+    }
+    return { subjects: results, weights: GRADE_WEIGHTS, gpa: creds ? +(pts / creds).toFixed(2) : null };
   }
 }

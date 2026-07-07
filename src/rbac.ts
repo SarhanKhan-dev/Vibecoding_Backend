@@ -9,6 +9,7 @@ import { diskStorage } from 'multer';
 import { extname } from 'path';
 import * as fs from 'fs';
 import { CurrentUser, Roles } from './auth';
+import * as bcrypt from 'bcryptjs';
 import {
   User, Subject, Enrollment, LeaveApplication, AttendanceRecord, Quiz, QuizGrade, RetakeRequest,
 } from './entities';
@@ -384,6 +385,21 @@ export class AdminController {
     @InjectRepository(LeaveApplication) private leaves: Repository<LeaveApplication>,
     @InjectRepository(Enrollment) private enrollments: Repository<Enrollment>,
   ) {}
+
+  @Roles('superadmin')
+  @Post('users')
+  async createUser(@Body() body: any) {
+    const { name, email, password, role = 'student' } = body || {};
+    if (!name || !email || !password) throw new BadRequestException('name, email and password are required');
+    if (!['student', 'teacher', 'superadmin'].includes(role)) throw new BadRequestException('Invalid role');
+    const dup = await this.users.findOneBy({ email: email.toLowerCase() });
+    if (dup) throw new BadRequestException('Email already in use');
+    const user = await this.users.save(this.users.create({
+      email: email.toLowerCase(), name, role,
+      passwordHash: await bcrypt.hash(password, 10),
+    }));
+    return safeUser(user);
+  }
 
   @Roles('superadmin')
   @Get('users')
