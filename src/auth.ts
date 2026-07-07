@@ -1,6 +1,6 @@
 import {
   Body, Controller, Post, Get, Delete, Injectable, CanActivate, ExecutionContext,
-  UnauthorizedException, BadRequestException, SetMetadata, createParamDecorator,
+  UnauthorizedException, BadRequestException, ForbiddenException, SetMetadata, createParamDecorator,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -10,6 +10,8 @@ import { User, Session } from './entities';
 
 export const IS_PUBLIC = 'isPublic';
 export const Public = () => SetMetadata(IS_PUBLIC, true);
+export const ROLES_KEY = 'roles';
+export const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles);
 
 export const CurrentUser = createParamDecorator(
   (_: unknown, ctx: ExecutionContext) => ctx.switchToHttp().getRequest().user,
@@ -52,8 +54,15 @@ export class AuthGuard implements CanActivate {
 
     const user = await this.users.findOneBy({ id: session.userId });
     if (!user) throw new UnauthorizedException('User no longer exists');
-    req.user = { sub: user.id, email: user.email, name: user.name };
+    req.user = { sub: user.id, email: user.email, name: user.name, role: user.role };
     req.sessionId = session.id;
+
+    const roles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
+      ctx.getHandler(), ctx.getClass(),
+    ]);
+    if (roles && roles.length && !roles.includes(user.role)) {
+      throw new ForbiddenException('You do not have permission to do this');
+    }
     return true;
   }
 }
@@ -78,6 +87,7 @@ export class AuthController {
   @Post('register')
   async register(@Body() body: any) {
     const { email, password, name, university = '', major = '' } = body || {};
+    const role = body?.role === 'teacher' ? 'teacher' : 'student'; // superadmin only via seed
     if (!email || !password || !name) throw new BadRequestException('name, email and password are required');
     if (password.length < 6) throw new BadRequestException('Password must be at least 6 characters');
     const existing = await this.users.findOneBy({ email: email.toLowerCase() });
@@ -85,7 +95,7 @@ export class AuthController {
     const user = await this.users.save(this.users.create({
       email: email.toLowerCase(),
       passwordHash: await bcrypt.hash(password, 10),
-      name, university, major,
+      name, university, major, role,
     }));
     return this.issue(user);
   }

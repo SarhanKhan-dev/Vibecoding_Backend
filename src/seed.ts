@@ -2,7 +2,10 @@ import { DataSource } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import * as fs from 'fs';
 import { join } from 'path';
-import { User, Subject, ScheduleSlot, Assignment, Exam, Note, FileItem } from './entities';
+import {
+  User, Subject, ScheduleSlot, Assignment, Exam, Note, FileItem,
+  Enrollment, LeaveApplication, AttendanceRecord, Quiz, QuizGrade, RetakeRequest,
+} from './entities';
 import { UPLOAD_DIR } from './api';
 
 // ---------- tiny PDF generator (valid single-page PDF with text lines) ----------
@@ -79,7 +82,7 @@ export async function seed(ds: DataSource) {
 
   // Seed version check: rich seed has 8 subjects. If already there, just regen files.
   const existing = await subjRepo.countBy({ userId: uid });
-  if (existing >= 8) { await regenFiles(); return; }
+  if (existing >= 8) { await regenFiles(); await seedRbac(ds, demo); return; }
 
   // Wipe old (smaller) demo data and reseed rich
   for (const repo of [subjRepo, slotRepo, aRepo, eRepo, nRepo, fRepo] as any[]) {
@@ -197,5 +200,119 @@ export async function seed(ds: DataSource) {
     }),
   ]);
 
+  await seedRbac(ds, demo);
   console.log('Seeded rich demo data: demo@student.com / demo123');
+}
+
+// ---------- RBAC seed: superadmin, teacher, enrolled students, leaves, attendance, quizzes ----------
+async function seedRbac(ds: DataSource, demo: User) {
+  const users = ds.getRepository(User);
+  const subjRepo = ds.getRepository(Subject);
+  const enrRepo = ds.getRepository(Enrollment);
+  const leaveRepo = ds.getRepository(LeaveApplication);
+  const attRepo = ds.getRepository(AttendanceRecord);
+  const quizRepo = ds.getRepository(Quiz);
+  const gradeRepo = ds.getRepository(QuizGrade);
+  const retakeRepo = ds.getRepository(RetakeRequest);
+
+  if (await users.findOneBy({ email: 'teacher@studyflow.com' })) {
+    // regenerate document PDFs (Vercel /tmp is wiped on cold starts)
+    writeSeedPdf('seed-medical-cert.pdf', ['Medical Certificate', 'Patient: Demo Student', 'Advised rest for 2 days - City Hospital']);
+    writeSeedPdf('seed-event-letter.pdf', ['Event Participation Letter', 'Student: Ali Hamza', 'National Hackathon 2026 - Invitation']);
+    writeSeedPdf('seed-retake-doc.pdf', ['Supporting Document', 'Student: Demo Student', 'Hospital admission slip for quiz day']);
+    return;
+  }
+
+  const mk = async (email: string, name: string, role: string, pass: string) =>
+    users.save(users.create({
+      email, name, role, passwordHash: await bcrypt.hash(pass, 10),
+      university: 'Tech University', major: role === 'student' ? 'Computer Science' : '',
+    }));
+
+  const admin = await users.findOneBy({ email: 'admin@studyflow.com' })
+    || await mk('admin@studyflow.com', 'Super Admin', 'superadmin', 'admin123');
+  const teacher = await mk('teacher@studyflow.com', 'Dr. Ahmed Raza', 'teacher', 'teacher123');
+  const s1 = await mk('ali@student.com', 'Ali Hamza', 'student', 'demo123');
+  const s2 = await mk('zara@student.com', 'Zara Sheikh', 'student', 'demo123');
+  const s3 = await mk('omar@student.com', 'Omar Farooq', 'student', 'demo123');
+  const s4 = await mk('ayesha@student.com', 'Ayesha Iqbal', 'student', 'demo123');
+  const studentIds = [demo.id, s1.id, s2.id, s3.id, s4.id];
+
+  const tSub1 = await subjRepo.save(subjRepo.create({
+    userId: teacher.id, teacherId: teacher.id, name: 'Data Structures', code: 'CS-201',
+    color: '#6366f1', teacher: teacher.name, room: 'B-104', credits: 4,
+  }));
+  const tSub2 = await subjRepo.save(subjRepo.create({
+    userId: teacher.id, teacherId: teacher.id, name: 'Database Systems', code: 'CS-310',
+    color: '#06b6d4', teacher: teacher.name, room: 'Lab-1', credits: 3,
+  }));
+
+  for (const sub of [tSub1, tSub2]) {
+    await enrRepo.save(studentIds.map((sid) => enrRepo.create({ subjectId: sub.id, studentId: sid })));
+  }
+
+  // Attendance: last 3 class days for CS-201
+  const dstr = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
+  const statuses = [
+    ['present', 'present', 'absent', 'present', 'late'],
+    ['present', 'late', 'present', 'absent', 'present'],
+    ['present', 'present', 'present', 'present', 'absent'],
+  ];
+  for (let day = 0; day < 3; day++) {
+    await attRepo.save(studentIds.map((sid, i) => attRepo.create({
+      subjectId: tSub1.id, teacherId: teacher.id, studentId: sid, date: dstr(day * 2 + 1), status: statuses[day][i],
+    })));
+  }
+
+  // Quizzes: one fully graded, one with demo student marked missed
+  const q1 = await quizRepo.save(quizRepo.create({
+    subjectId: tSub1.id, teacherId: teacher.id, title: 'Quiz 1 - Trees & Recursion',
+    description: 'AVL rotations, tree traversals', totalMarks: 10, date: day(-7, 9),
+  }));
+  const q1marks = [8.5, 7, 9, 6.5, 8];
+  await gradeRepo.save(studentIds.map((sid, i) => gradeRepo.create({
+    quizId: q1.id, studentId: sid, marks: q1marks[i], status: 'graded',
+  })));
+
+  const q2 = await quizRepo.save(quizRepo.create({
+    subjectId: tSub1.id, teacherId: teacher.id, title: 'Quiz 2 - Graph Algorithms',
+    description: 'BFS, DFS, shortest paths', totalMarks: 15, date: day(-2, 9),
+  }));
+  await gradeRepo.save(studentIds.map((sid, i) => gradeRepo.create({
+    quizId: q2.id, studentId: sid,
+    marks: sid === demo.id ? null : [null, 12, 13.5, 10, 11][i],
+    status: sid === demo.id ? 'missed' : 'graded',
+  })));
+
+  const q3 = await quizRepo.save(quizRepo.create({
+    subjectId: tSub2.id, teacherId: teacher.id, title: 'Quiz 1 - SQL & Normalization',
+    description: 'Joins, 3NF, BCNF', totalMarks: 20, date: day(3, 10),
+  }));
+
+  // Leave applications (with supporting PDF documents)
+  writeSeedPdf('seed-medical-cert.pdf', ['Medical Certificate', 'Patient: Demo Student', 'Advised rest for 2 days - City Hospital']);
+  writeSeedPdf('seed-event-letter.pdf', ['Event Participation Letter', 'Student: Ali Hamza', 'National Hackathon 2026 - Invitation']);
+  await leaveRepo.save([
+    leaveRepo.create({
+      studentId: demo.id, subjectId: tSub1.id,
+      reason: 'I was ill with a high fever and could not attend classes. Medical certificate attached.',
+      fromDate: dstr(3), toDate: dstr(2), filename: 'seed-medical-cert.pdf', originalName: 'medical-certificate.pdf',
+    }),
+    leaveRepo.create({
+      studentId: s1.id, subjectId: tSub1.id,
+      reason: 'Representing the university at the National Hackathon. Invitation letter attached.',
+      fromDate: dstr(1), toDate: dstr(0), filename: 'seed-event-letter.pdf', originalName: 'hackathon-invitation.pdf',
+      status: 'approved', teacherComment: 'Approved - good luck at the hackathon!',
+    }),
+  ]);
+
+  // Retake request from demo student for the missed quiz (with document)
+  writeSeedPdf('seed-retake-doc.pdf', ['Supporting Document', 'Student: Demo Student', 'Hospital admission slip for quiz day']);
+  await retakeRepo.save(retakeRepo.create({
+    quizId: q2.id, studentId: demo.id,
+    reason: 'I missed Quiz 2 because I was admitted to the hospital that morning. Admission slip attached. Requesting a retake.',
+    filename: 'seed-retake-doc.pdf', originalName: 'hospital-slip.pdf',
+  }));
+
+  console.log('Seeded RBAC: admin@studyflow.com/admin123, teacher@studyflow.com/teacher123');
 }

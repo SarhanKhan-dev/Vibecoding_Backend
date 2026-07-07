@@ -10,6 +10,7 @@ export class User {
   @Column() name: string;
   @Column({ default: '' }) university: string;
   @Column({ default: '' }) major: string;
+  @Column({ default: 'student' }) role: string; // student | teacher | superadmin
   @CreateDateColumn() createdAt: Date;
 }
 
@@ -32,6 +33,7 @@ export class Subject {
   @Column({ default: '' }) room: string;
   @Column({ type: 'int', default: 3 }) credits: number;
   @Column({ default: '' }) grade: string; // A, A-, B+ ... for GPA calc
+  @Column({ nullable: true }) teacherId: number; // set when owned by a teacher account
   @CreateDateColumn() createdAt: Date;
 }
 
@@ -94,4 +96,70 @@ export class FileItem {
   @Column({ nullable: true }) subjectId: number;
   @Column({ default: 'slide' }) kind: string; // slide | timetable
   @CreateDateColumn() uploadedAt: Date;
+}
+
+@Entity('enrollments')
+export class Enrollment {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column() subjectId: number; // teacher-owned subject
+  @Index() @Column() studentId: number;
+  @CreateDateColumn() createdAt: Date;
+}
+
+@Entity('leave_applications')
+export class LeaveApplication {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column() studentId: number;
+  @Index() @Column() subjectId: number;
+  @Column({ type: 'text' }) reason: string;
+  @Column({ default: '' }) fromDate: string;
+  @Column({ default: '' }) toDate: string;
+  @Column({ nullable: true }) filename: string;
+  @Column({ default: '' }) originalName: string;
+  @Column({ default: 'pending' }) status: string; // pending | approved | rejected
+  @Column({ default: '' }) teacherComment: string;
+  @CreateDateColumn() createdAt: Date;
+}
+
+@Entity('attendance_records')
+export class AttendanceRecord {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column() subjectId: number;
+  @Column() teacherId: number;
+  @Index() @Column() studentId: number;
+  @Column() date: string; // YYYY-MM-DD
+  @Column({ default: 'present' }) status: string; // present | absent | late
+}
+
+@Entity('quizzes')
+export class Quiz {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column() subjectId: number;
+  @Index() @Column() teacherId: number;
+  @Column() title: string;
+  @Column({ default: '' }) description: string;
+  @Column({ type: 'int', default: 10 }) totalMarks: number;
+  @Column({ type: 'timestamptz', nullable: true }) date: Date;
+  @CreateDateColumn() createdAt: Date;
+}
+
+@Entity('quiz_grades')
+export class QuizGrade {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column() quizId: number;
+  @Index() @Column() studentId: number;
+  @Column({ type: 'float', nullable: true }) marks: number;
+  @Column({ default: 'pending' }) status: string; // pending | graded | missed
+}
+
+@Entity('retake_requests')
+export class RetakeRequest {
+  @PrimaryGeneratedColumn() id: number;
+  @Index() @Column() quizId: number;
+  @Index() @Column() studentId: number;
+  @Column({ type: 'text' }) reason: string;
+  @Column({ nullable: true }) filename: string;
+  @Column({ default: '' }) originalName: string;
+  @Column({ default: 'pending' }) status: string; // pending | approved | rejected
+  @CreateDateColumn() createdAt: Date;
 }
