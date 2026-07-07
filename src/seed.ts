@@ -569,7 +569,22 @@ async function seedScheduled(ds: DataSource) {
   const quizRepo = ds.getRepository(Quiz);
   const qRepo = ds.getRepository(QuizQuestion);
 
-  if (await quizRepo.findOneBy({ title: 'CS-3A Scheduled Quiz (12:30)' })) return; // once
+  // strict timeslots (PKT = UTC+5):
+  // quiz  : 12:30 -> 12:45  (10 questions)
+  // exam  : 12:45 -> 14:05  (80 MCQs x 1 min = exactly 80 minutes)
+  const now = new Date();
+  const at = (h: number, m: number) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h - 5, m));
+  const quizStart = at(12, 30), quizEnd = at(12, 45);
+  const examStart = at(12, 45), examEnd = at(14, 5);
+
+  // if already seeded, just resync the windows to today's timeslots
+  const existingQuiz = await quizRepo.findOneBy({ title: 'CS-3A Scheduled Quiz (12:30)' });
+  if (existingQuiz) {
+    await quizRepo.update({ id: existingQuiz.id }, { startAt: quizStart, endAt: quizEnd, date: quizStart });
+    const existingExam = await quizRepo.findOneBy({ title: 'CS-3A Grand Exam (80 MCQs)' });
+    if (existingExam) await quizRepo.update({ id: existingExam.id }, { startAt: examStart, endAt: examEnd, date: examStart });
+    return;
+  }
 
   const teacher = await users.findOneBy({ email: 'teacher@studyflow.com' });
   if (!teacher) return;
@@ -578,10 +593,7 @@ async function seedScheduled(ds: DataSource) {
     || (await subjRepo.findOneBy({ teacherId: teacher.id, code: 'CS-201' }));
   if (!subject) return;
 
-  // ----- Quiz: opens today 12:30 PKT (07:30 UTC), closes 23:59 PKT -----
-  const now = new Date();
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 7, 30)); // 12:30 PKT
-  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 18, 59)); // 23:59 PKT
+  const start = quizStart, end = quizEnd;
   const quiz = await quizRepo.save(quizRepo.create({
     subjectId: subject.id, teacherId: teacher.id, kind: 'online', category: 'quiz',
     title: 'CS-3A Scheduled Quiz (12:30)', description: 'Section CS-3A - 10 questions, 60 seconds each.',
@@ -605,9 +617,9 @@ async function seedScheduled(ds: DataSource) {
   // ----- Exam: 80 MCQs, live now for a week so it can be attempted any time -----
   const exam = await quizRepo.save(quizRepo.create({
     subjectId: subject.id, teacherId: teacher.id, kind: 'exam', category: 'final',
-    title: 'CS-3A Grand Exam (80 MCQs)', description: '80 questions, 1 minute each = 80 minutes. Every student gets a shuffled set.',
+    title: 'CS-3A Grand Exam (80 MCQs)', description: '80 questions, 1 minute each = 80 minutes. Window: 12:45 - 14:05. Every student gets a shuffled set.',
     totalMarks: 80, questionsPerStudent: 80, secondsPerQuestion: 60,
-    startAt: new Date(Date.now() - 3600000), endAt: day(7, 23), date: new Date(),
+    startAt: examStart, endAt: examEnd, date: examStart,
   }));
   const CORE: [string, string[], number][] = [
     ['What does CPU stand for?', ['Central Process Unit', 'Central Processing Unit', 'Computer Personal Unit', 'Central Program Utility'], 1],
