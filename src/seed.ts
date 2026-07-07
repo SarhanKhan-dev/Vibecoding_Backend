@@ -577,7 +577,38 @@ async function seedScheduled(ds: DataSource) {
   const quizStart = at(12, 30), quizEnd = at(12, 45);
   const examStart = at(12, 45), examEnd = at(14, 5);
 
-  // if already seeded, just resync the windows to today's timeslots
+  const teacher = await users.findOneBy({ email: 'teacher@studyflow.com' });
+  if (!teacher) return;
+  const subject = (await subjRepo.findBy({ teacherId: teacher.id }))
+    .find((x) => x.code === 'CS-201' && x.section === 'CS-3A')
+    || (await subjRepo.findOneBy({ teacherId: teacher.id, code: 'CS-201' }));
+  if (!subject) return;
+
+  // ----- INSTANT quiz: always live (window refreshed on every boot) - attempt any time, score instantly -----
+  const liveStart = new Date(Date.now() - 3600000);
+  const liveEnd = new Date(Date.now() + 48 * 3600000);
+  const instant = await quizRepo.findOneBy({ title: 'CS-3A Live Quiz (12:30 session)' });
+  if (instant) {
+    await quizRepo.update({ id: instant.id }, { startAt: liveStart, endAt: liveEnd, date: liveStart });
+  } else {
+    const iq = await quizRepo.save(quizRepo.create({
+      subjectId: subject.id, teacherId: teacher.id, kind: 'online', category: 'quiz',
+      title: 'CS-3A Live Quiz (12:30 session)', description: 'Open now - attempt and get your score instantly.',
+      totalMarks: 6, questionsPerStudent: 6, secondsPerQuestion: 60,
+      startAt: liveStart, endAt: liveEnd, date: liveStart,
+    }));
+    const SIX: [string, string[], number][] = [
+      ['Which data structure works on FIFO?', ['Stack', 'Queue', 'Tree', 'Heap'], 1],
+      ['Big-O of binary search is:', ['O(n)', 'O(log n)', 'O(1)', 'O(n log n)'], 1],
+      ['Inorder traversal of a BST gives:', ['Random order', 'Sorted order', 'Reverse order', 'Level order'], 1],
+      ['Which sort is O(n^2) in the worst case?', ['Mergesort', 'Heapsort', 'Quicksort', 'Radix sort'], 2],
+      ['A hash table handles collisions with:', ['Rotation', 'Chaining', 'Recursion', 'Sorting'], 1],
+      ['Which structure backs recursion internally?', ['Queue', 'Call stack', 'Heap', 'Graph'], 1],
+    ];
+    await qRepo.save(SIX.map(([text, options, correct]) => qRepo.create({ quizId: iq.id, text, options, correct })));
+  }
+
+  // if already seeded, just resync the timeslot windows
   const existingQuiz = await quizRepo.findOneBy({ title: 'CS-3A Scheduled Quiz (12:30)' });
   if (existingQuiz) {
     await quizRepo.update({ id: existingQuiz.id }, { startAt: quizStart, endAt: quizEnd, date: quizStart });
@@ -585,13 +616,6 @@ async function seedScheduled(ds: DataSource) {
     if (existingExam) await quizRepo.update({ id: existingExam.id }, { startAt: examStart, endAt: examEnd, date: examStart });
     return;
   }
-
-  const teacher = await users.findOneBy({ email: 'teacher@studyflow.com' });
-  if (!teacher) return;
-  const subject = (await subjRepo.findBy({ teacherId: teacher.id }))
-    .find((x) => x.code === 'CS-201' && x.section === 'CS-3A')
-    || (await subjRepo.findOneBy({ teacherId: teacher.id, code: 'CS-201' }));
-  if (!subject) return;
 
   const start = quizStart, end = quizEnd;
   const quiz = await quizRepo.save(quizRepo.create({
