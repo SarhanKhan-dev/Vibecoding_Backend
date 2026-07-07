@@ -50,6 +50,15 @@ const day = (n: number, h = 23, m = 59) => {
 
 export async function seed(ds: DataSource) {
   const users = ds.getRepository(User);
+
+  // one-time migration: rebrand existing account emails to @studyoka.com
+  try {
+    await users.query(
+      "UPDATE users SET email = REPLACE(email, '@studyflow.com', '@studyoka.com') WHERE email LIKE '%@studyflow.com'"
+    );
+  } catch (e) {
+    console.error('Email migration skipped:', (e as Error).message);
+  }
   const subjRepo = ds.getRepository(Subject);
   const slotRepo = ds.getRepository(ScheduleSlot);
   const aRepo = ds.getRepository(Assignment);
@@ -219,7 +228,7 @@ async function seedRbac(ds: DataSource, demo: User) {
   const gradeRepo = ds.getRepository(QuizGrade);
   const retakeRepo = ds.getRepository(RetakeRequest);
 
-  if (await users.findOneBy({ email: 'teacher@studyflow.com' })) {
+  if (await users.findOneBy({ email: 'teacher@studyoka.com' })) {
     // regenerate document PDFs (Vercel /tmp is wiped on cold starts)
     writeSeedPdf('seed-medical-cert.pdf', ['Medical Certificate', 'Patient: Demo Student', 'Advised rest for 2 days - City Hospital']);
     writeSeedPdf('seed-event-letter.pdf', ['Event Participation Letter', 'Student: Ali Hamza', 'National Hackathon 2026 - Invitation']);
@@ -233,9 +242,9 @@ async function seedRbac(ds: DataSource, demo: User) {
       university: 'Tech University', major: role === 'student' ? 'Computer Science' : '',
     }));
 
-  const admin = await users.findOneBy({ email: 'admin@studyflow.com' })
-    || await mk('admin@studyflow.com', 'Super Admin', 'superadmin', 'admin123');
-  const teacher = await mk('teacher@studyflow.com', 'Dr. Ahmed Raza', 'teacher', 'teacher123');
+  const admin = await users.findOneBy({ email: 'admin@studyoka.com' })
+    || await mk('admin@studyoka.com', 'Super Admin', 'superadmin', 'admin123');
+  const teacher = await mk('teacher@studyoka.com', 'Dr. Ahmed Raza', 'teacher', 'teacher123');
   const s1 = await mk('ali@student.com', 'Ali Hamza', 'student', 'demo123');
   const s2 = await mk('zara@student.com', 'Zara Sheikh', 'student', 'demo123');
   const s3 = await mk('omar@student.com', 'Omar Farooq', 'student', 'demo123');
@@ -318,7 +327,7 @@ async function seedRbac(ds: DataSource, demo: User) {
     filename: 'seed-retake-doc.pdf', originalName: 'hospital-slip.pdf',
   }));
 
-  console.log('Seeded RBAC: admin@studyflow.com/admin123, teacher@studyflow.com/teacher123');
+  console.log('Seeded RBAC: admin@studyoka.com/admin123, teacher@studyoka.com/teacher123');
 }
 
 // ---------- Online quiz / exam / classwork seed (idempotent) ----------
@@ -332,7 +341,7 @@ async function seedOnline(ds: DataSource, demo: User) {
 
   if (await qRepo.count() > 0) return; // already seeded
 
-  const teacher = await users.findOneBy({ email: 'teacher@studyflow.com' });
+  const teacher = await users.findOneBy({ email: 'teacher@studyoka.com' });
   if (!teacher) return;
   const tSubs = await subjRepo.findBy({ teacherId: teacher.id });
   const cs201 = tSubs.find((s) => s.code === 'CS-201') || tSubs[0];
@@ -414,7 +423,7 @@ async function seedOnline(ds: DataSource, demo: User) {
 // ---------- Campus seed v4: 3 teachers, 25 students, sections, full weighted gradebook ----------
 async function seedCampus(ds: DataSource, demo: User) {
   const users = ds.getRepository(User);
-  if (await users.findOneBy({ email: 'student25@studyflow.com' })) return; // already seeded
+  if (await users.findOneBy({ email: 'student25@studyoka.com' })) return; // already seeded
 
   const subjRepo = ds.getRepository(Subject);
   const enrRepo = ds.getRepository(Enrollment);
@@ -433,10 +442,10 @@ async function seedCampus(ds: DataSource, demo: User) {
   };
 
   // 1 superadmin (already exists via earlier seed), 3 teachers, 25 students
-  await mk('admin@studyflow.com', 'Super Admin', 'superadmin', 'admin123');
-  const t1 = await mk('teacher@studyflow.com', 'Dr. Ahmed Raza', 'teacher', 'teacher123');
-  const t2 = await mk('teacher2@studyflow.com', 'Prof. Sana Khan', 'teacher', 'teacher123');
-  const t3 = await mk('teacher3@studyflow.com', 'Dr. Fatima Noor', 'teacher', 'teacher123');
+  await mk('admin@studyoka.com', 'Super Admin', 'superadmin', 'admin123');
+  const t1 = await mk('teacher@studyoka.com', 'Dr. Ahmed Raza', 'teacher', 'teacher123');
+  const t2 = await mk('teacher2@studyoka.com', 'Prof. Sana Khan', 'teacher', 'teacher123');
+  const t3 = await mk('teacher3@studyoka.com', 'Dr. Fatima Noor', 'teacher', 'teacher123');
 
   const NAMES = [
     'Ali Hamza', 'Zara Sheikh', 'Omar Farooq', 'Ayesha Iqbal', 'Hassan Mehmood',
@@ -447,7 +456,7 @@ async function seedCampus(ds: DataSource, demo: User) {
   ];
   const students: User[] = [];
   for (let i = 0; i < 25; i++) {
-    students.push(await mk(`student${i + 1}@studyflow.com`, NAMES[i], 'student', 'student123'));
+    students.push(await mk(`student${i + 1}@studyoka.com`, NAMES[i], 'student', 'student123'));
   }
   // demo student joins Section A
   const secA = [demo, ...students.slice(0, 12)];  // 13 students
@@ -577,7 +586,7 @@ async function seedScheduled(ds: DataSource) {
   const quizStart = at(12, 30), quizEnd = at(12, 45);
   const examStart = at(12, 45), examEnd = at(14, 5);
 
-  const teacher = await users.findOneBy({ email: 'teacher@studyflow.com' });
+  const teacher = await users.findOneBy({ email: 'teacher@studyoka.com' });
   if (!teacher) return;
   const subject = (await subjRepo.findBy({ teacherId: teacher.id }))
     .find((x) => x.code === 'CS-201' && x.section === 'CS-3A')
