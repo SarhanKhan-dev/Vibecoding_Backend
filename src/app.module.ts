@@ -1,16 +1,15 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { JwtModule } from '@nestjs/jwt';
 import 'dotenv/config';
-import { User, Subject, ScheduleSlot, Assignment, Exam, Note, FileItem } from './entities';
+import { User, Session, Subject, ScheduleSlot, Assignment, Exam, Note, FileItem } from './entities';
 import { AuthController, AuthGuard } from './auth';
 import {
   SubjectsController, ScheduleController, AssignmentsController,
   ExamsController, NotesController, FilesController, DashboardController,
 } from './api';
 
-const entities = [User, Subject, ScheduleSlot, Assignment, Exam, Note, FileItem];
+const entities = [User, Session, Subject, ScheduleSlot, Assignment, Exam, Note, FileItem];
 
 @Module({
   imports: [
@@ -22,11 +21,6 @@ const entities = [User, Subject, ScheduleSlot, Assignment, Exam, Note, FileItem]
       synchronize: true,
     }),
     TypeOrmModule.forFeature(entities),
-    JwtModule.register({
-      global: true,
-      secret: process.env.JWT_SECRET || 'studyflow-secret',
-      signOptions: { expiresIn: '7d' },
-    }),
   ],
   controllers: [
     AuthController, SubjectsController, ScheduleController, AssignmentsController,

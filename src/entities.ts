@@ -13,6 +13,14 @@ export class User {
   @CreateDateColumn() createdAt: Date;
 }
 
+@Entity('sessions')
+export class Session {
+  @PrimaryGeneratedColumn('uuid') id: string;
+  @Index() @Column() userId: number;
+  @Column({ type: 'timestamptz' }) expiresAt: Date;
+  @CreateDateColumn() createdAt: Date;
+}
+
 @Entity('subjects')
 export class Subject {
   @PrimaryGeneratedColumn() id: number;

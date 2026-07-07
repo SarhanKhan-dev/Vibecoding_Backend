@@ -1,13 +1,12 @@
 import {
-  Body, Controller, Post, Get, Injectable, CanActivate, ExecutionContext,
+  Body, Controller, Post, Get, Delete, Injectable, CanActivate, ExecutionContext,
   UnauthorizedException, BadRequestException, SetMetadata, createParamDecorator,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
-import { User } from './entities';
+import { User, Session } from './entities';
 
 export const IS_PUBLIC = 'isPublic';
 export const Public = () => SetMetadata(IS_PUBLIC, true);
@@ -16,23 +15,46 @@ export const CurrentUser = createParamDecorator(
   (_: unknown, ctx: ExecutionContext) => ctx.switchToHttp().getRequest().user,
 );
 
+const SESSION_DAYS = 7;
+
+// Session-based auth: the client holds an opaque session ID (sent as
+// "Authorization: Bearer <sessionId>"); the session itself lives in Postgres,
+// so it can be revoked server-side at any time (logout deletes it).
 @Injectable()
 export class AuthGuard implements CanActivate {
-  constructor(private jwt: JwtService, private reflector: Reflector) {}
+  constructor(
+    private reflector: Reflector,
+    @InjectRepository(Session) private sessions: Repository<Session>,
+    @InjectRepository(User) private users: Repository<User>,
+  ) {}
+
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, [
       ctx.getHandler(), ctx.getClass(),
     ]);
     if (isPublic) return true;
+
     const req = ctx.switchToHttp().getRequest();
-    const token = (req.headers.authorization || '').replace('Bearer ', '');
-    if (!token) throw new UnauthorizedException('Missing token');
+    const sessionId = (req.headers.authorization || '').replace('Bearer ', '').trim();
+    if (!sessionId) throw new UnauthorizedException('Not logged in');
+
+    let session: Session | null = null;
     try {
-      req.user = await this.jwt.verifyAsync(token);
-      return true;
+      session = await this.sessions.findOneBy({ id: sessionId });
     } catch {
-      throw new UnauthorizedException('Invalid token');
+      throw new UnauthorizedException('Invalid session'); // malformed uuid
     }
+    if (!session) throw new UnauthorizedException('Session expired — please log in again');
+    if (new Date(session.expiresAt) < new Date()) {
+      await this.sessions.delete({ id: session.id });
+      throw new UnauthorizedException('Session expired — please log in again');
+    }
+
+    const user = await this.users.findOneBy({ id: session.userId });
+    if (!user) throw new UnauthorizedException('User no longer exists');
+    req.user = { sub: user.id, email: user.email, name: user.name };
+    req.sessionId = session.id;
+    return true;
   }
 }
 
@@ -40,13 +62,16 @@ export class AuthGuard implements CanActivate {
 export class AuthController {
   constructor(
     @InjectRepository(User) private users: Repository<User>,
-    private jwt: JwtService,
+    @InjectRepository(Session) private sessions: Repository<Session>,
   ) {}
 
   private async issue(user: User) {
-    const token = await this.jwt.signAsync({ sub: user.id, email: user.email, name: user.name });
+    const session = await this.sessions.save(this.sessions.create({
+      userId: user.id,
+      expiresAt: new Date(Date.now() + SESSION_DAYS * 86400000),
+    }));
     const { passwordHash, ...safe } = user;
-    return { token, user: safe };
+    return { token: session.id, user: safe };
   }
 
   @Public()
@@ -74,6 +99,12 @@ export class AuthController {
       throw new UnauthorizedException('Invalid email or password');
     }
     return this.issue(user);
+  }
+
+  @Delete('logout')
+  async logout(@CurrentUser() u: any, @Body() _body: any) {
+    await this.sessions.delete({ userId: u.sub });
+    return { ok: true };
   }
 
   @Get('me')
