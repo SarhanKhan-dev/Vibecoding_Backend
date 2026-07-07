@@ -83,7 +83,7 @@ export async function seed(ds: DataSource) {
 
   // Seed version check: rich seed has 8 subjects. If already there, just regen files.
   const existing = await subjRepo.countBy({ userId: uid });
-  if (existing >= 8) { await regenFiles(); await seedRbac(ds, demo); await seedOnline(ds, demo); await seedCampus(ds, demo); return; }
+  if (existing >= 8) { await regenFiles(); await seedRbac(ds, demo); await seedOnline(ds, demo); await seedCampus(ds, demo); await seedScheduled(ds); return; }
 
   // Wipe old (smaller) demo data and reseed rich
   for (const repo of [subjRepo, slotRepo, aRepo, eRepo, nRepo, fRepo] as any[]) {
@@ -204,6 +204,7 @@ export async function seed(ds: DataSource) {
   await seedRbac(ds, demo);
   await seedOnline(ds, demo);
   await seedCampus(ds, demo);
+  await seedScheduled(ds);
   console.log('Seeded rich demo data: demo@student.com / demo123');
 }
 
@@ -559,4 +560,92 @@ async function seedCampus(ds: DataSource, demo: User) {
   }
 
   console.log('Seeded campus v4: 3 teachers, 25 students, sections CS-3A/CS-3B, full gradebook');
+}
+
+// ---------- Scheduled live session: 12:30 quiz (10 Qs) + 80-MCQ exam for section CS-3A ----------
+async function seedScheduled(ds: DataSource) {
+  const users = ds.getRepository(User);
+  const subjRepo = ds.getRepository(Subject);
+  const quizRepo = ds.getRepository(Quiz);
+  const qRepo = ds.getRepository(QuizQuestion);
+
+  if (await quizRepo.findOneBy({ title: 'CS-3A Scheduled Quiz (12:30)' })) return; // once
+
+  const teacher = await users.findOneBy({ email: 'teacher@studyflow.com' });
+  if (!teacher) return;
+  const subject = (await subjRepo.findBy({ teacherId: teacher.id }))
+    .find((x) => x.code === 'CS-201' && x.section === 'CS-3A')
+    || (await subjRepo.findOneBy({ teacherId: teacher.id, code: 'CS-201' }));
+  if (!subject) return;
+
+  // ----- Quiz: opens today 12:30 PKT (07:30 UTC), closes 23:59 PKT -----
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 7, 30)); // 12:30 PKT
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 18, 59)); // 23:59 PKT
+  const quiz = await quizRepo.save(quizRepo.create({
+    subjectId: subject.id, teacherId: teacher.id, kind: 'online', category: 'quiz',
+    title: 'CS-3A Scheduled Quiz (12:30)', description: 'Section CS-3A - 10 questions, 60 seconds each.',
+    totalMarks: 10, questionsPerStudent: 10, secondsPerQuestion: 60,
+    startAt: start, endAt: end, date: start,
+  }));
+  const TEN: [string, string[], number][] = [
+    ['Which sorting algorithm is O(n log n) in the worst case?', ['Quicksort', 'Mergesort', 'Bubble sort', 'Insertion sort'], 1],
+    ['A binary heap is typically stored in:', ['A linked list', 'An array', 'A hash table', 'A graph'], 1],
+    ['Which traversal visits the root first?', ['Inorder', 'Postorder', 'Preorder', 'Level-order from leaves'], 2],
+    ['The best structure for undo functionality is a:', ['Queue', 'Stack', 'Heap', 'Set'], 1],
+    ['Searching a balanced BST takes:', ['O(1)', 'O(n)', 'O(log n)', 'O(n log n)'], 2],
+    ['A graph with no cycles that is connected is called a:', ['Forest', 'Tree', 'Ring', 'Mesh'], 1],
+    ['Which structure gives O(1) average insert and lookup?', ['Array', 'BST', 'Hash table', 'Linked list'], 2],
+    ['Topological sort applies to:', ['Any graph', 'DAGs only', 'Trees only', 'Weighted graphs only'], 1],
+    ['The two-pointer technique is most used on:', ['Heaps', 'Sorted arrays', 'Hash maps', 'Tries'], 1],
+    ['Which is NOT a stable sorting algorithm?', ['Mergesort', 'Insertion sort', 'Quicksort', 'Bubble sort'], 2],
+  ];
+  await qRepo.save(TEN.map(([text, options, correct]) => qRepo.create({ quizId: quiz.id, text, options, correct })));
+
+  // ----- Exam: 80 MCQs, live now for a week so it can be attempted any time -----
+  const exam = await quizRepo.save(quizRepo.create({
+    subjectId: subject.id, teacherId: teacher.id, kind: 'exam', category: 'final',
+    title: 'CS-3A Grand Exam (80 MCQs)', description: '80 questions, 1 minute each = 80 minutes. Every student gets a shuffled set.',
+    totalMarks: 80, questionsPerStudent: 80, secondsPerQuestion: 60,
+    startAt: new Date(Date.now() - 3600000), endAt: day(7, 23), date: new Date(),
+  }));
+  const CORE: [string, string[], number][] = [
+    ['What does CPU stand for?', ['Central Process Unit', 'Central Processing Unit', 'Computer Personal Unit', 'Central Program Utility'], 1],
+    ['Binary of decimal 10 is:', ['1010', '1001', '1100', '1111'], 0],
+    ['Which is a NoSQL database?', ['PostgreSQL', 'MongoDB', 'MySQL', 'Oracle'], 1],
+    ['HTTP status 404 means:', ['Server error', 'Unauthorized', 'Not found', 'Forbidden'], 2],
+    ['Which protocol secures web traffic?', ['FTP', 'HTTP', 'TLS', 'SMTP'], 2],
+    ['RAM is:', ['Non-volatile', 'Volatile', 'Permanent', 'Optical'], 1],
+    ['Which is an interpreted language?', ['C', 'C++', 'Python', 'Rust'], 2],
+    ['A byte contains how many bits?', ['4', '8', '16', '32'], 1],
+    ['Which layer routes packets?', ['Transport', 'Network', 'Session', 'Physical'], 1],
+    ['Git command to save a snapshot:', ['git push', 'git commit', 'git pull', 'git merge'], 1],
+    ['SQL keyword to remove duplicates:', ['UNIQUE', 'DISTINCT', 'DIFFERENT', 'SINGLE'], 1],
+    ['Worst case of linear search:', ['O(1)', 'O(log n)', 'O(n)', 'O(n^2)'], 2],
+    ['Which is NOT an OOP pillar?', ['Encapsulation', 'Inheritance', 'Compilation', 'Polymorphism'], 2],
+    ['IPv4 addresses have how many bits?', ['16', '32', '64', '128'], 1],
+    ['The OS component managing memory is the:', ['Compiler', 'Kernel', 'Shell', 'Loader'], 1],
+    ['Which structure is LIFO?', ['Queue', 'Stack', 'List', 'Graph'], 1],
+    ['DNS translates domain names to:', ['MAC addresses', 'IP addresses', 'Ports', 'URLs'], 1],
+    ['Which is a compiled language?', ['JavaScript', 'Python', 'Go', 'Ruby'], 2],
+    ['Deadlock requires circular:', ['Reference', 'Wait', 'Queue', 'Import'], 1],
+    ['REST APIs commonly exchange data as:', ['XML only', 'JSON', 'CSV', 'YAML only'], 1],
+  ];
+  const bank: any[] = CORE.map(([text, options, correct]) => ({ text, options, correct }));
+  // programmatically generated questions to reach 80, each with a rotated correct position
+  for (let i = 0; bank.length < 80; i++) {
+    const a = 3 + (i % 12), b = 4 + (i % 9);
+    const right = a * b;
+    const opts = [right, right + a, right - b, right + b + 1].map(String);
+    const rot = i % 4;
+    const rotated = [...opts.slice(rot), ...opts.slice(0, rot)];
+    bank.push({
+      text: `Computational check #${i + 1}: what is ${a} x ${b}?`,
+      options: rotated,
+      correct: rotated.indexOf(String(right)),
+    });
+  }
+  await qRepo.save(bank.map((q) => qRepo.create({ quizId: exam.id, text: q.text, options: q.options, correct: q.correct })));
+
+  console.log('Seeded scheduled 12:30 quiz and 80-MCQ exam for CS-3A');
 }
