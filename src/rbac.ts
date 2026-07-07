@@ -47,13 +47,45 @@ export class TeacherController {
     return result;
   }
 
+  // distinct sections across campus with student counts (for the create-class dropdown)
+  @Roles('teacher', 'superadmin')
+  @Get('sections')
+  async sections() {
+    const subs = (await this.subjects.find()).filter((s) => s.section);
+    if (!subs.length) return [];
+    const enr = await this.enrollments.findBy({ subjectId: In(subs.map((s) => s.id)) });
+    const map: Record<string, Set<number>> = {};
+    for (const s of subs) map[s.section] = map[s.section] || new Set<number>();
+    for (const e of enr) {
+      const sec = subs.find((s) => s.id === e.subjectId)?.section;
+      if (sec) map[sec].add(e.studentId);
+    }
+    return Object.entries(map)
+      .map(([section, set]) => ({ section, students: set.size }))
+      .sort((a, b) => a.section.localeCompare(b.section));
+  }
+
   @Roles('teacher', 'superadmin')
   @Post('subjects')
-  create(@CurrentUser() u: any, @Body() body: any) {
+  async create(@CurrentUser() u: any, @Body() body: any) {
     if (!body?.name) throw new BadRequestException('name is required');
-    return this.subjects.save(this.subjects.create({
+    const saved = await this.subjects.save(this.subjects.create({
       ...body, id: undefined, userId: u.sub, teacherId: u.sub, teacher: u.name, grade: '',
-    }));
+    })) as unknown as Subject;
+    // auto-enroll every student already in this section
+    let autoEnrolled = 0;
+    if (saved.section) {
+      const same = (await this.subjects.find()).filter((x) => x.section === saved.section && x.id !== saved.id);
+      if (same.length) {
+        const enr = await this.enrollments.findBy({ subjectId: In(same.map((x) => x.id)) });
+        const ids = [...new Set(enr.map((e) => e.studentId))];
+        for (const sid of ids) {
+          await this.enrollments.save(this.enrollments.create({ subjectId: saved.id, studentId: sid }));
+        }
+        autoEnrolled = ids.length;
+      }
+    }
+    return { ...saved, autoEnrolled };
   }
 
   @Roles('teacher', 'superadmin')
